@@ -1,0 +1,4 @@
+https://httpbin.org/status/200
+https://httpbin.org/status/404
+https://httpbin.org/delay/15
+https://invalid-domain-that-does-not-exist.example

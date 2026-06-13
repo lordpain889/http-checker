@@ -1,0 +1,5 @@
+URL,Status Code,Response Time,Error
+https://httpbin.org/status/200,200,0.699,
+https://httpbin.org/status/404,404,0.656,
+https://httpbin.org/delay/15,,10.497,Timeout
+https://invalid-domain-that-does-not-exist.example,,0.01,Connection error: ConnectionError
