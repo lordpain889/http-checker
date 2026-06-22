@@ -6,12 +6,14 @@ import csv
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
 DEFAULT_INPUT = "urls.txt"
 DEFAULT_OUTPUT = "results.csv"
 DEFAULT_TIMEOUT = 10
+DEFAULT_RETRIES = 2
 
 
 def load_urls(path: Path) -> list[str]:
@@ -33,21 +35,35 @@ def load_urls(path: Path) -> list[str]:
     return urls
 
 
-def check_url(url: str, timeout: int) -> tuple[int | None, float | None, str]:
+def is_valid_http_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def check_url(url: str, timeout: int, retries: int) -> tuple[int | None, float | None, str]:
     start = time.perf_counter()
-    try:
-        response = requests.get(url, timeout=timeout, allow_redirects=True)
-        elapsed = time.perf_counter() - start
-        return response.status_code, round(elapsed, 3), ""
-    except requests.exceptions.Timeout:
-        elapsed = time.perf_counter() - start
-        return None, round(elapsed, 3), "Timeout"
-    except requests.exceptions.ConnectionError as exc:
-        elapsed = time.perf_counter() - start
-        return None, round(elapsed, 3), f"Connection error: {exc.__class__.__name__}"
-    except requests.exceptions.RequestException as exc:
-        elapsed = time.perf_counter() - start
-        return None, round(elapsed, 3), str(exc)
+    last_error = ""
+
+    for attempt in range(retries + 1):
+        try:
+            response = requests.get(url, timeout=timeout, allow_redirects=True)
+            elapsed = time.perf_counter() - start
+            if response.status_code >= 500 and attempt < retries:
+                last_error = f"Server error {response.status_code}"
+                continue
+            return response.status_code, round(elapsed, 3), ""
+        except requests.exceptions.Timeout:
+            last_error = "Timeout"
+        except requests.exceptions.ConnectionError as exc:
+            last_error = f"Connection error: {exc.__class__.__name__}"
+        except requests.exceptions.RequestException as exc:
+            last_error = str(exc)
+
+        if attempt < retries:
+            time.sleep(0.25 * (attempt + 1))
+
+    elapsed = time.perf_counter() - start
+    return None, round(elapsed, 3), f"{last_error} (after {retries + 1} attempts)"
 
 
 def save_results(path: Path, rows: list[dict[str, str | int | float | None]]) -> None:
@@ -83,6 +99,13 @@ def main() -> None:
         default=DEFAULT_TIMEOUT,
         help=f"Request timeout in seconds (default: {DEFAULT_TIMEOUT})",
     )
+    parser.add_argument(
+        "-r",
+        "--retries",
+        type=int,
+        default=DEFAULT_RETRIES,
+        help=f"Retries for timeout/5xx errors (default: {DEFAULT_RETRIES})",
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -91,10 +114,15 @@ def main() -> None:
     total = len(urls)
     results: list[dict[str, str | int | float | None]] = []
 
-    print(f"Checking {total} URL(s) with a {args.timeout}s timeout...\n")
+    print(
+        f"Checking {total} URL(s) with a {args.timeout}s timeout and {max(0, args.retries)} retries...\n"
+    )
 
     for index, url in enumerate(urls, start=1):
-        status_code, response_time, error = check_url(url, args.timeout)
+        if not is_valid_http_url(url):
+            status_code, response_time, error = None, None, "Invalid URL (must start with http:// or https://)"
+        else:
+            status_code, response_time, error = check_url(url, args.timeout, max(0, args.retries))
         row = {
             "URL": url,
             "Status Code": status_code if status_code is not None else "",
